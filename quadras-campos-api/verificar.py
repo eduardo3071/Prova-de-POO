@@ -8,7 +8,7 @@ from app.models.cliente import Cliente
 from app.models.erros import ConflitoError
 from app.models.espaco import PERFIS, Campo, Espaco, Quadra
 from app.models.reserva import Reserva
-from app.routes import espaco_routes, reserva_routes
+from app.routes import espaco_routes, reserva_routes, cliente_routes
 from app.routes.reserva_routes import NovaReserva
 from main import app
 
@@ -70,6 +70,8 @@ checar("Valor total da reserva = valor_hora x duração", Reserva(9, campo, clie
 checar("Conflito de horário levanta ConflitoError", levanta(ConflitoError, Reserva(9, quadra, cliente, "2026-12-01", 10, 2).verificar_disponibilidade, [Reserva(8, quadra, cliente, "2026-12-01", 11, 2)]))
 
 # --- Rotas e códigos HTTP
+checar("GET /api/clientes devolve a lista", len(cliente_routes.listar_clientes()) >= 5)
+checar("GET /api/clientes/{id} inexistente -> 404", codigo_http(cliente_routes.buscar_cliente, 999) == 404)
 checar("GET /api/espacos devolve a lista", len(espaco_routes.listar_espacos()) >= 5)
 checar("Filtro ?tipo=campo só devolve campos", {e["tipo"] for e in espaco_routes.listar_espacos("campo")} == {"campo"})
 checar("GET /api/espacos/{id} inexistente -> 404", codigo_http(espaco_routes.buscar_espaco, 999) == 404)

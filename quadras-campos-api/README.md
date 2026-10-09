@@ -110,6 +110,8 @@ quadras-campos-api/
 | GET | `/api/espacos/{id}/agenda/{data}` | Reservas do dia e horários livres | 200, 404 |
 | POST | `/api/reservas` | Agenda um horário | 201, 404, 409, 422 |
 | DELETE | `/api/reservas/{id}` | Cancela e libera o horário | 200, 404 |
+| GET | `/api/clientes` | Lista os clientes | 200 |
+| GET | `/api/clientes/{id}` | Um cliente | 200, 404 |
 | GET | `/api/clientes/{id}/reservas` | Histórico do cliente | 200, 404 |
 | GET | `/api/relatorio/faturamento` | Total e total por espaço | 200 |
 
