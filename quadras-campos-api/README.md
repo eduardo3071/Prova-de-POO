@@ -121,14 +121,14 @@ Exemplo de corpo do `POST /api/reservas`:
 
 ## Quem fez o quê
 
-> Preencham com a divisão real e façam commits de todos ao longo da semana.
+Divisão completa, com arquivos e fluxo de trabalho, em [DIVISAO-DE-TAREFAS.md](DIVISAO-DE-TAREFAS.md).
 
-| Integrante | Responsabilidade |
-|---|---|
-| Eduardo Oliveira | models/espaco.py (hierarquia, herança, super()) |
-| Eduardo França | models/reserva.py (regras, ConflitoError) |
-| Gabriel Jesus | controllers + data (mocks) |
-| Gabriel Pilar | routes + verificar.py + README |
+| Integrante | GitHub | Responsabilidade |
+|---|---|---|
+| Eduardo Oliveira | @eduardo3071 | Hierarquia: `CampoSociety`, herança e `super()` |
+| Eduardo França | @EduardoFranca2805 | Regra de antecedência mínima e checagens |
+| Gabriel Jesus | @Senseei | Controllers e mocks |
+| Gabriel Pilar | @GenezisDev | Rotas de clientes e documentação |
 
 ## Saída do verificar.py
 
