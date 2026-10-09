@@ -25,3 +25,11 @@ class ClienteController:
     def buscar_por_id(self, id):
         cliente = self.buscar_objeto(id)
         return self._para_dicionario(cliente) if cliente else None
+
+    def buscar_por_nome(self, nome):
+        termo = nome.strip().lower()
+        return [
+            self._para_dicionario(c)
+            for c in self._clientes
+            if termo in c.mostrar_nome().lower()
+        ]
