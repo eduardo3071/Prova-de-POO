@@ -1,0 +1,400 @@
+### app/routes/__init__.py
+
+### app/routes/espaco_routes.py
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException
+
+from app.controllers.cliente_controller import ClienteController
+from app.controllers.espaco_controller import EspacoController
+from app.controllers.reserva_controller import ReservaController
+
+espacos = EspacoController()
+clientes = ClienteController()
+reservas = ReservaController(espacos, clientes)
+
+router = APIRouter(prefix="/api", tags=["Espaços"])
+
+
+@router.get("/espacos")
+def listar_espacos(tipo: Optional[str] = None):
+    """Lista quadras e campos. Filtro opcional: ?tipo=quadra ou ?tipo=campo."""
+    return espacos.listar(tipo)
+
+
+@router.get("/espacos/{id}")
+def buscar_espaco(id: int):
+    espaco = espacos.buscar_por_id(id)
+    if espaco is None:
+        raise HTTPException(status_code=404, detail="Espaço não encontrado.")
+    return espaco
+
+
+@router.get("/espacos/{id}/agenda/{data}")
+def agenda_do_espaco(id: int, data: str):
+    """Reservas do dia e horários livres (data no formato AAAA-MM-DD)."""
+    agenda = reservas.agenda(id, data)
+    if agenda is None:
+        raise HTTPException(status_code=404, detail="Espaço não encontrado.")
+    return agenda
+
+### app/routes/reserva_routes.py
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from app.models.erros import ConflitoError
+from app.routes.espaco_routes import clientes, reservas
+
+router = APIRouter(prefix="/api", tags=["Reservas"])
+
+
+class NovaReserva(BaseModel):
+    espaco_id: int
+    cliente_id: int
+    data: str
+    hora_inicio: int
+    duracao: int
+
+
+@router.post("/reservas", status_code=201)
+def criar_reserva(corpo: NovaReserva):
+    try:
+        reserva = reservas.criar(
+            corpo.espaco_id, corpo.cliente_id, corpo.data, corpo.hora_inicio, corpo.duracao
+        )
+    except ConflitoError as erro:
+        raise HTTPException(status_code=409, detail=str(erro))
+    except ValueError as erro:
+        raise HTTPException(status_code=422, detail=str(erro))
+    if reserva is None:
+        raise HTTPException(status_code=404, detail="Espaço ou cliente não encontrado.")
+    return reserva
+
+
+@router.delete("/reservas/{id}")
+def cancelar_reserva(id: int):
+    reserva = reservas.cancelar(id)
+    if reserva is None:
+        raise HTTPException(status_code=404, detail="Reserva não encontrada.")
+    return {"mensagem": "Reserva cancelada.", "reserva": reserva}
+
+
+@router.get("/clientes/{id}/reservas")
+def reservas_do_cliente(id: int):
+    if clientes.buscar_por_id(id) is None:
+        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+    return reservas.listar_por_cliente(id)
+
+
+@router.get("/relatorio/faturamento")
+def faturamento():
+    return reservas.faturamento()
+
+### main.py
+from fastapi import FastAPI
+
+from app.routes import espaco_routes, reserva_routes
+
+app = FastAPI(
+    title="Quadras & Campos API",
+    description="Agendamento de horários para aluguel de quadras e campos.",
+)
+
+app.include_router(espaco_routes.router)
+app.include_router(reserva_routes.router)
+
+### verificar.py
+"""Verificação da API de Quadras & Campos. Rode: python verificar.py"""
+import pathlib
+import sys
+
+from fastapi import HTTPException
+
+from app.models.cliente import Cliente
+from app.models.erros import ConflitoError
+from app.models.espaco import PERFIS, Campo, Espaco, Quadra
+from app.models.reserva import Reserva
+from app.routes import espaco_routes, reserva_routes
+from app.routes.reserva_routes import NovaReserva
+from main import app
+
+resultados = []
+
+
+def checar(descricao, condicao):
+    resultados.append(bool(condicao))
+    print(f"[{'OK' if condicao else 'FALHOU'}] {descricao}")
+
+
+def levanta(excecao, funcao, *args):
+    try:
+        funcao(*args)
+    except excecao:
+        return True
+    return False
+
+
+def status_da_rota(caminho, metodo):
+    achadas = [r for r in app.routes if getattr(r, "path", "") == caminho and metodo in r.methods]
+    return achadas[0].status_code if achadas else None
+
+
+def codigo_http(funcao, *args):
+    try:
+        funcao(*args)
+    except HTTPException as erro:
+        return erro.status_code
+    return 200
+
+
+def corpo(**mudancas):
+    base = dict(espaco_id=2, cliente_id=1, data="2026-12-01", hora_inicio=10, duracao=2)
+    base.update(mudancas)
+    return NovaReserva(**base)
+
+
+quadra = Quadra(1, "Quadra Teste", True)
+campo = Campo(2, "Campo Teste")
+cliente = Cliente(1, "Fulano de Tal", "11999998888")
+
+# --- Models: encapsulamento e regras
+checar("Atributos são protegidos (sem acesso público a nome/id)", not hasattr(quadra, "nome") and not hasattr(quadra, "id"))
+checar("Não existe alterar_id em nenhuma classe", not any(hasattr(c, "alterar_id") for c in (Espaco, Cliente, Reserva)))
+checar("Construtor valida: nome curto de espaço levanta ValueError", levanta(ValueError, Quadra, 9, "ab"))
+checar("Construtor valida: telefone inválido levanta ValueError", levanta(ValueError, Cliente, 9, "Fulano", "123"))
+checar("Regra: data inválida levanta ValueError", levanta(ValueError, Reserva, 9, quadra, cliente, "31/12/2026", 10, 1))
+checar("Regra: duração fora de 1-4h levanta ValueError", levanta(ValueError, Reserva, 9, quadra, cliente, "2026-12-01", 10, 5))
+checar("Regra: fora do horário de funcionamento levanta ValueError", levanta(ValueError, Reserva, 9, quadra, cliente, "2026-12-01", 22, 2))
+
+# --- Herança e polimorfismo
+checar("Hierarquia: Quadra e Campo herdam de Espaco", issubclass(Quadra, Espaco) and issubclass(Campo, Espaco))
+checar("Constante de classe PRECO_HORA difere nas filhas", Quadra.PRECO_HORA != Campo.PRECO_HORA)
+checar("super() estende valor_hora (quadra coberta = base + taxa)", quadra.valor_hora() == Quadra.PRECO_HORA + Quadra.TAXA_COBERTURA)
+checar("Polimorfismo: valor_hora difere entre quadra e campo", quadra.valor_hora() != campo.valor_hora())
+checar("PERFIS mapeia texto do mock para classe", PERFIS["quadra"] is Quadra and PERFIS["campo"] is Campo)
+checar("Valor total da reserva = valor_hora x duração", Reserva(9, campo, cliente, "2026-12-01", 10, 2).valor_total() == campo.valor_hora() * 2)
+checar("Conflito de horário levanta ConflitoError", levanta(ConflitoError, Reserva(9, quadra, cliente, "2026-12-01", 10, 2).verificar_disponibilidade, [Reserva(8, quadra, cliente, "2026-12-01", 11, 2)]))
+
+# --- Rotas e códigos HTTP
+checar("GET /api/espacos devolve a lista", len(espaco_routes.listar_espacos()) >= 5)
+checar("Filtro ?tipo=campo só devolve campos", {e["tipo"] for e in espaco_routes.listar_espacos("campo")} == {"campo"})
+checar("GET /api/espacos/{id} inexistente -> 404", codigo_http(espaco_routes.buscar_espaco, 999) == 404)
+checar("GET /api/espacos/{id}/agenda/{data} mostra horas livres", 18 not in espaco_routes.agenda_do_espaco(1, "2026-10-20")["horas_livres"])
+checar("POST /api/reservas declara status 201", status_da_rota("/api/reservas", "POST") == 201)
+checar("POST /api/reservas válida cria a reserva", reserva_routes.criar_reserva(corpo())["valor_total"] == 2 * Quadra.PRECO_HORA)
+checar("POST /api/reservas no mesmo horário -> 409", codigo_http(reserva_routes.criar_reserva, corpo()) == 409)
+checar("POST /api/reservas fora do expediente -> 422", codigo_http(reserva_routes.criar_reserva, corpo(hora_inicio=22)) == 422)
+checar("POST /api/reservas com espaço inexistente -> 404", codigo_http(reserva_routes.criar_reserva, corpo(espaco_id=999)) == 404)
+checar("GET /api/clientes/{id}/reservas inexistente -> 404", codigo_http(reserva_routes.reservas_do_cliente, 999) == 404)
+checar("DELETE /api/reservas/{id} inexistente -> 404", codigo_http(reserva_routes.cancelar_reserva, 999) == 404)
+checar("Cancelar libera o horário (recriar não dá 409)", codigo_http(reserva_routes.cancelar_reserva, 7) == 200 and codigo_http(reserva_routes.criar_reserva, corpo()) == 200)
+checar("GET /api/relatorio/faturamento soma as reservas", reserva_routes.faturamento()["total"] > 0)
+
+# --- Camadas e estilo
+fontes_models = "".join(p.read_text(encoding="utf-8") for p in pathlib.Path("app/models").glob("*.py"))
+todas_fontes = "".join(
+    p.read_text(encoding="utf-8") for p in pathlib.Path("app").rglob("*.py")
+)
+checar("Nenhum import de FastAPI dentro de app/models", "fastapi" not in fontes_models)
+checar("Nenhum if comparando tipo ou nome de classe no projeto", "isinstance" not in todas_fontes and "__name__ ==" not in todas_fontes and "type(" not in todas_fontes.replace("type(self).__name__", ""))
+checar("Mocks não têm import nem classe", not any("import" in p.read_text(encoding="utf-8") or "class " in p.read_text(encoding="utf-8") for p in pathlib.Path("app/data").glob("*_mock.py")))
+
+print(f"\n{sum(resultados)}/{len(resultados)} checagens passaram.")
+sys.exit(0 if all(resultados) else 1)
+
+### README.md
+# Quadras & Campos API
+
+Backend de agendamento de horários para aluguel de quadras e campos esportivos.
+Prova de POO (prof. Rodrigo) — Eduardo Oliveira, Eduardo França, Gabriel Jesus e Gabriel Pilar.
+
+**Domínio:** o cliente escolhe uma quadra ou campo, uma data e um horário; a reserva só é aceita se o
+espaço estiver livre e dentro do horário de funcionamento (8h às 23h, de 1 a 4 horas seguidas).
+O preço vem do próprio espaço (polimorfismo): campo e quadra cobram valores diferentes.
+
+> O tema "Quadras & Campos" não está entre os 12 do enunciado, então seguimos o mesmo esqueleto:
+> entidade principal (Espaco), hierarquia (Espaco -> Quadra, Campo) e o registro que liga as duas (Reserva).
+
+## Como rodar
+
+```bash
+pip install -r requirements.txt
+uvicorn main:app --reload
+```
+
+Documentação interativa em http://127.0.0.1:8000/docs. Para verificar tudo: `python verificar.py`.
+
+## Diagrama de classes
+
+```mermaid
+classDiagram
+    class Espaco {
+        +TIPO
+        +PRECO_HORA
+        +SUPERFICIE
+        +JOGADORES
+        -_id
+        -_nome
+        -_coberta
+        +mostrar_id()
+        +mostrar_nome()
+        +mostrar_tipo()
+        +mostrar_coberta()
+        +alterar_nome(nome)
+        +alterar_coberta(coberta)
+        +valor_hora()
+        +descricao()
+    }
+    class Quadra {
+        +TAXA_COBERTURA
+        +valor_hora()
+        +descricao()
+    }
+    class Campo {
+        +TAXA_ILUMINACAO
+        +valor_hora()
+        +descricao()
+    }
+    class Cliente {
+        -_id
+        -_nome
+        -_telefone
+        +mostrar_id()
+        +mostrar_nome()
+        +mostrar_telefone()
+        +alterar_nome(nome)
+        +alterar_telefone(telefone)
+    }
+    class Reserva {
+        +ABERTURA
+        +FECHAMENTO
+        +DURACAO_MAXIMA
+        -_id
+        -_espaco
+        -_cliente
+        -_data
+        -_hora_inicio
+        -_duracao
+        +mostrar_data()
+        +alterar_data(data)
+        +alterar_horario(hora_inicio, duracao)
+        +horas_ocupadas()
+        +valor_total()
+        +conflita_com(outra)
+        +verificar_disponibilidade(existentes)
+    }
+    Espaco <|-- Quadra
+    Espaco <|-- Campo
+    Cliente "1" --> "0..*" Reserva : faz
+    Espaco "1" --> "0..*" Reserva : é reservado em
+```
+
+Relacionamentos: **herança** entre Espaco e suas filhas (Quadra/Campo *são* um Espaco); **associação** entre
+Reserva e Espaco/Cliente (a reserva *guarda* referências, mas nenhum dos dois depende dela para existir).
+
+## Estrutura
+
+```
+quadras-campos-api/
+├── main.py
+├── verificar.py
+├── requirements.txt
+└── app/
+    ├── data/         mocks (espaco, cliente, reserva) — só dicionários
+    ├── models/       Espaco/Quadra/Campo, Cliente, Reserva, ConflitoError — sem FastAPI
+    ├── controllers/  casos de uso; devolvem dicionário, None ou lista vazia
+    └── routes/       endereços e códigos HTTP (404, 409, 422, 201)
+```
+
+## Rotas
+
+| Método | Rota | Descrição | Códigos |
+|---|---|---|---|
+| GET | `/api/espacos` | Lista quadras e campos (filtro `?tipo=quadra` ou `campo`) | 200 |
+| GET | `/api/espacos/{id}` | Um espaço, com valor/hora | 200, 404 |
+| GET | `/api/espacos/{id}/agenda/{data}` | Reservas do dia e horários livres | 200, 404 |
+| POST | `/api/reservas` | Agenda um horário | 201, 404, 409, 422 |
+| DELETE | `/api/reservas/{id}` | Cancela e libera o horário | 200, 404 |
+| GET | `/api/clientes/{id}/reservas` | Histórico do cliente | 200, 404 |
+| GET | `/api/relatorio/faturamento` | Total e total por espaço | 200 |
+
+Exemplo de corpo do `POST /api/reservas`:
+
+```json
+{"espaco_id": 2, "cliente_id": 1, "data": "2026-12-01", "hora_inicio": 10, "duracao": 2}
+```
+
+## Quem fez o quê
+
+Divisão completa, com arquivos e fluxo de trabalho, em [DIVISAO-DE-TAREFAS.md](DIVISAO-DE-TAREFAS.md).
+
+| Integrante | GitHub | Responsabilidade |
+|---|---|---|
+| Eduardo Oliveira | @eduardo3071 | Hierarquia: `CampoSociety`, herança e `super()` |
+| Eduardo França | @EduardoFranca2805 | Regra de antecedência mínima e checagens |
+| Gabriel Jesus | @Senseei | Controllers e mocks |
+| Gabriel Pilar | @GenezisDev | Rotas de clientes e documentação |
+
+## Saída do verificar.py
+
+```
+[OK] Atributos são protegidos (sem acesso público a nome/id)
+[OK] Não existe alterar_id em nenhuma classe
+[OK] Construtor valida: nome curto de espaço levanta ValueError
+[OK] Construtor valida: telefone inválido levanta ValueError
+[OK] Regra: data inválida levanta ValueError
+[OK] Regra: duração fora de 1-4h levanta ValueError
+[OK] Regra: fora do horário de funcionamento levanta ValueError
+[OK] Hierarquia: Quadra e Campo herdam de Espaco
+[OK] Constante de classe PRECO_HORA difere nas filhas
+[OK] super() estende valor_hora (quadra coberta = base + taxa)
+[OK] Polimorfismo: valor_hora difere entre quadra e campo
+[OK] PERFIS mapeia texto do mock para classe
+[OK] Valor total da reserva = valor_hora x duração
+[OK] Conflito de horário levanta ConflitoError
+[OK] GET /api/espacos devolve a lista
+[OK] Filtro ?tipo=campo só devolve campos
+[OK] GET /api/espacos/{id} inexistente -> 404
+[OK] GET /api/espacos/{id}/agenda/{data} mostra horas livres
+[OK] POST /api/reservas declara status 201
+[OK] POST /api/reservas válida cria a reserva
+[OK] POST /api/reservas no mesmo horário -> 409
+[OK] POST /api/reservas fora do expediente -> 422
+[OK] POST /api/reservas com espaço inexistente -> 404
+[OK] GET /api/clientes/{id}/reservas inexistente -> 404
+[OK] DELETE /api/reservas/{id} inexistente -> 404
+[OK] Cancelar libera o horário (recriar não dá 409)
+[OK] GET /api/relatorio/faturamento soma as reservas
+[OK] Nenhum import de FastAPI dentro de app/models
+[OK] Nenhum if comparando tipo ou nome de classe no projeto
+[OK] Mocks não têm import nem classe
+
+30/30 checagens passaram.
+```
+
+### DIVISAO-DE-TAREFAS.md
+# Divisão de tarefas
+
+Cada tarefa mexe em arquivos diferentes para evitar conflito de merge. Ao terminar, rode `python verificar.py` (tem que passar inteiro) e faça o commit **com a sua própria conta**.
+
+| Integrante | GitHub | Tarefa | Arquivos |
+|---|---|---|---|
+| Eduardo Oliveira | [@eduardo3071](https://github.com/eduardo3071) | **Hierarquia.** Adicionar uma terceira filha, `CampoSociety`, que herda de `Campo` e estende um método com `super()`. Registrar `"campo_society"` no `PERFIS` e criar um mock. | `app/models/espaco.py`, `app/data/espaco_mock.py` |
+| Eduardo França | [@EduardoFranca2805](https://github.com/EduardoFranca2805) | **Regra de negócio.** Exigir antecedência mínima de 1 dia na reserva (`raise ValueError`, que a rota traduz em 422). Adicionar 2 checagens no `verificar.py`. | `app/models/reserva.py`, `verificar.py` |
+| Gabriel Jesus | [@Senseei](https://github.com/Senseei) | **Controllers e mocks.** Ampliar os mocks para pelo menos 5 registros bem variados por entidade. Adicionar busca de cliente por nome no `ClienteController` (compreensão de lista). | `app/data/*_mock.py`, `app/controllers/cliente_controller.py` |
+| Gabriel Pilar | [@GenezisDev](https://github.com/GenezisDev) | **Rotas e documentação.** Criar `GET /api/clientes` e `GET /api/clientes/{id}` (404 quando não existe). Revisar o README (tabela de rotas, diagrama) e colar a saída final do `verificar.py`. | `app/routes/`, `README.md` |
+
+## Fluxo de trabalho
+
+1. Clonar: `git clone https://github.com/eduardo3071/Prova-de-POO.git`
+2. Antes de começar: `git pull`
+3. Fazer a tarefa, em commits pequenos e com mensagem clara
+4. Rodar `python verificar.py`
+5. Enviar: `git push`
+
+## Regras do grupo
+
+- Nada de FastAPI dentro de `app/models/`.
+- Nenhum `if` comparando tipo ou nome de classe.
+- Validação fica na model (`raise ValueError`), nunca na rota.
+- Na arguição, qualquer integrante pode ser chamado a explicar qualquer linha. Leiam também o código dos colegas.

@@ -1,0 +1,144 @@
+### app/controllers/__init__.py
+
+### app/controllers/espaco_controller.py
+from app.models.espaco import carregar_espacos
+
+
+class EspacoController:
+    def __init__(self):
+        self._espacos = carregar_espacos()
+
+    def _para_dicionario(self, espaco):
+        return {
+            "id": espaco.mostrar_id(),
+            "nome": espaco.mostrar_nome(),
+            "tipo": espaco.mostrar_tipo(),
+            "coberta": espaco.mostrar_coberta(),
+            "descricao": espaco.descricao(),
+            "valor_hora": espaco.valor_hora(),
+        }
+
+    def listar(self, tipo=None):
+        return [
+            self._para_dicionario(e)
+            for e in self._espacos
+            if tipo is None or e.mostrar_tipo() == tipo.lower()
+        ]
+
+    def listar_objetos(self):
+        return list(self._espacos)
+
+    def buscar_objeto(self, id):
+        achados = [e for e in self._espacos if e.mostrar_id() == id]
+        return achados[0] if achados else None
+
+    def buscar_por_id(self, id):
+        espaco = self.buscar_objeto(id)
+        return self._para_dicionario(espaco) if espaco else None
+
+### app/controllers/cliente_controller.py
+from app.models.cliente import carregar_clientes
+
+
+class ClienteController:
+    def __init__(self):
+        self._clientes = carregar_clientes()
+
+    def _para_dicionario(self, cliente):
+        return {
+            "id": cliente.mostrar_id(),
+            "nome": cliente.mostrar_nome(),
+            "telefone": cliente.mostrar_telefone(),
+        }
+
+    def listar(self):
+        return [self._para_dicionario(c) for c in self._clientes]
+
+    def listar_objetos(self):
+        return list(self._clientes)
+
+    def buscar_objeto(self, id):
+        achados = [c for c in self._clientes if c.mostrar_id() == id]
+        return achados[0] if achados else None
+
+    def buscar_por_id(self, id):
+        cliente = self.buscar_objeto(id)
+        return self._para_dicionario(cliente) if cliente else None
+
+### app/controllers/reserva_controller.py
+from app.models.reserva import Reserva, carregar_reservas
+
+
+class ReservaController:
+    def __init__(self, espacos, clientes):
+        self._espacos = espacos
+        self._clientes = clientes
+        self._reservas = carregar_reservas(espacos.listar_objetos(), clientes.listar_objetos())
+        self._proximo_id = max(r.mostrar_id() for r in self._reservas) + 1
+
+    def _para_dicionario(self, reserva):
+        return {
+            "id": reserva.mostrar_id(),
+            "espaco": reserva.mostrar_espaco().mostrar_nome(),
+            "espaco_id": reserva.mostrar_espaco().mostrar_id(),
+            "cliente": reserva.mostrar_cliente().mostrar_nome(),
+            "cliente_id": reserva.mostrar_cliente().mostrar_id(),
+            "data": reserva.mostrar_data(),
+            "hora_inicio": reserva.mostrar_hora_inicio(),
+            "duracao": reserva.mostrar_duracao(),
+            "valor_total": reserva.valor_total(),
+        }
+
+    def criar(self, espaco_id, cliente_id, data, hora_inicio, duracao):
+        espaco = self._espacos.buscar_objeto(espaco_id)
+        cliente = self._clientes.buscar_objeto(cliente_id)
+        if espaco is None or cliente is None:
+            return None
+        reserva = Reserva(self._proximo_id, espaco, cliente, data, hora_inicio, duracao)
+        reserva.verificar_disponibilidade(self._reservas)
+        self._reservas.append(reserva)
+        self._proximo_id += 1
+        return self._para_dicionario(reserva)
+
+    def cancelar(self, id):
+        achadas = [r for r in self._reservas if r.mostrar_id() == id]
+        if not achadas:
+            return None
+        self._reservas = [r for r in self._reservas if r.mostrar_id() != id]
+        return self._para_dicionario(achadas[0])
+
+    def listar_por_cliente(self, cliente_id):
+        return [
+            self._para_dicionario(r)
+            for r in self._reservas
+            if r.mostrar_cliente().mostrar_id() == cliente_id
+        ]
+
+    def agenda(self, espaco_id, data):
+        espaco = self._espacos.buscar_objeto(espaco_id)
+        if espaco is None:
+            return None
+        do_dia = [
+            r
+            for r in self._reservas
+            if r.mostrar_espaco().mostrar_id() == espaco_id and r.mostrar_data() == data
+        ]
+        ocupadas = {h for r in do_dia for h in r.horas_ocupadas()}
+        return {
+            "espaco": espaco.mostrar_nome(),
+            "data": data,
+            "reservas": [self._para_dicionario(r) for r in do_dia],
+            "horas_livres": [
+                h for h in range(Reserva.ABERTURA, Reserva.FECHAMENTO) if h not in ocupadas
+            ],
+        }
+
+    def faturamento(self):
+        por_espaco = {}
+        for r in self._reservas:
+            nome = r.mostrar_espaco().mostrar_nome()
+            por_espaco[nome] = por_espaco.get(nome, 0) + r.valor_total()
+        return {
+            "total": sum(r.valor_total() for r in self._reservas),
+            "por_espaco": por_espaco,
+        }
